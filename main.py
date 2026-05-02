@@ -33,7 +33,7 @@ def get_telegram_updates():
             for update in r.json().get("result", []):
                 last_update_id = update["update_id"]
                 msg = update.get("message", {}).get("text", "")
-                if msg.startswith("/token "):
+                if msg and msg.startswith("/token "):
                     current_token = msg[7:].strip()
                     logging.info("Yeni token alındı!")
                     send_telegram("✅ Token güncellendi! Bot kontrol ediyor...")
@@ -43,6 +43,7 @@ def get_telegram_updates():
         logging.error(f"Update hatası: {e}")
 
 def token_is_valid():
+    global current_token
     if not current_token:
         return False
     try:
@@ -55,6 +56,8 @@ def token_is_valid():
 
 def check_appointments():
     global current_token
+    if not current_token:
+        return
     today = datetime.now().strftime("%Y-%m-%d")
     max_date = (datetime.now() + timedelta(days=60)).strftime("%Y-%m-%d")
     session = requests.Session()
@@ -68,10 +71,10 @@ def check_appointments():
         try:
             url = f"https://api.kosmosvize.com.tr/api/AppointmentClosedDates/GetClosedDate?dealerId={DEALER_ID}&date={today}&maxDate={max_date}&appointmentTypeId={type_id}"
             r = session.get(url, timeout=15)
-            logging.info(f"typeId={type_id} → {r.status_code} ({len(r.text)}b)")
+            logging.info(f"typeId={type_id} -> {r.status_code} ({len(r.text)}b)")
             if r.status_code == 401:
                 current_token = None
-                send_telegram("⚠️ Token süresi doldu!\n\n1. https://basvuru.kosmosvize.com.tr/appointmentForm\n2. Formları doldur → takvim sayfasına gel\n3. F12 → Network → GetClosedDate → Authorization header kopyala (Bearer'dan sonrasını)\n4. Bana /token XXXXX gönder")
+                send_telegram("⚠️ Token süresi doldu!\n\n1. https://basvuru.kosmosvize.com.tr/appointmentForm\n2. Formları doldur, takvim sayfasına gel\n3. F12 → Network → GetClosedDate → Authorization header kopyala (eyJ... ile başlayan kısım)\n4. Bana /token eyJ... gönder")
                 return
             if r.status_code == 200 and len(r.text) < 300:
                 send_telegram(f"🚨 KOSMOS VİZE RANDEVU BULUNDU!\ntypeId={type_id}\n⏰ {datetime.now().strftime('%H:%M')}\n\n👉 https://basvuru.kosmosvize.com.tr/appointmentForm")
@@ -87,8 +90,9 @@ def telegram_listener():
         time.sleep(2)
 
 def main():
+    global current_token
     logging.info("Bot başlatıldı!")
-    send_telegram("✅ Kosmos Bot başlatıldı!\n\nToken göndermek için:\n1. https://basvuru.kosmosvize.com.tr/appointmentForm\n2. Formları doldur, takvim sayfasına gel\n3. F12 → Network → GetClosedDate isteği → Headers → Authorization değerini kopyala (eyJ... ile başlayan kısım)\n4. /token eyJ... şeklinde gönder\n\nDurum: /status")
+    send_telegram("✅ Kosmos Bot başlatıldı!\n\nToken göndermek için:\n1. https://basvuru.kosmosvize.com.tr/appointmentForm\n2. Formları doldur, takvim sayfasına gel\n3. F12 → Network → GetClosedDate → Headers → Authorization değerini kopyala (eyJ... ile başlayan kısım)\n4. /token eyJ... şeklinde gönder\n\nDurum: /status")
     threading.Thread(target=telegram_listener, daemon=True).start()
     while True:
         if not current_token:
