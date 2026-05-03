@@ -18,39 +18,56 @@ current_token = None
 last_update_id = 0
 
 def send_telegram(message):
-    try:
-        url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
-        requests.post(url, json={"chat_id": TELEGRAM_CHAT_ID, "text": message}, timeout=10)
-    except Exception as e:
-        logging.error(f"Telegram hatası: {e}")
+    for attempt in range(3):
+        try:
+            url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
+            r = requests.post(url, json={"chat_id": TELEGRAM_CHAT_ID, "text": message}, timeout=15)
+            if r.status_code == 200:
+                logging.info(f"Telegram OK: {message[:40]}")
+                return True
+        except Exception as e:
+            logging.error(f"Telegram send attempt {attempt+1}: {e}")
+            time.sleep(2)
+    return False
 
 def get_telegram_updates():
     global last_update_id, current_token
-    try:
-        url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/getUpdates"
-        r = requests.get(url, params={"offset": last_update_id + 1, "timeout": 30}, timeout=35)
-        if r.status_code == 200:
-            for update in r.json().get("result", []):
-                last_update_id = update["update_id"]
-                msg = update.get("message", {}).get("text", "")
-                if msg and msg.startswith("/token "):
-                    current_token = msg[7:].strip()
-                    logging.info("Yeni token alındı!")
-                    send_telegram("✅ Token güncellendi! Bot kontrol ediyor...")
-                elif msg == "/status":
-                    send_telegram(f"✅ Bot çalışıyor\nToken: {'var ✅' if current_token else 'yok ❌'}")
-    except Exception as e:
-        logging.error(f"Update hatası: {e}")
+    for attempt in range(3):
+        try:
+            url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/getUpdates"
+            r = requests.get(
+                url,
+                params={"offset": last_update_id + 1, "timeout": 20, "limit": 10},
+                timeout=25
+            )
+            if r.status_code == 200:
+                for update in r.json().get("result", []):
+                    last_update_id = update["update_id"]
+                    msg = update.get("message", {}).get("text", "")
+                    chat_id = str(update.get("message", {}).get("chat", {}).get("id", ""))
+                    logging.info(f"Mesaj alindi: '{msg[:30]}' from {chat_id}")
+                    if msg and msg.startswith("/token "):
+                        current_token = msg[7:].strip()
+                        logging.info("Yeni token alindi!")
+                        send_telegram("✅ Token güncellendi! Bot kontrol ediyor...")
+                    elif msg == "/status":
+                        send_telegram(f"✅ Bot calisıyor\nToken: {'var ✅' if current_token else 'yok ❌'}")
+                return True
+        except Exception as e:
+            logging.error(f"Telegram update attempt {attempt+1}: {e}")
+            time.sleep(3)
+    return False
 
 def token_is_valid():
-    global current_token
     if not current_token:
         return False
     try:
         payload = current_token.split('.')[1]
         payload += '=' * (4 - len(payload) % 4)
         data = json.loads(base64.b64decode(payload))
-        return data.get('exp', 0) - time.time() > 300
+        remaining = data.get('exp', 0) - time.time()
+        logging.info(f"Token suresi: {int(remaining/60)} dakika kaldi")
+        return remaining > 300
     except:
         return True
 
@@ -74,35 +91,53 @@ def check_appointments():
             logging.info(f"typeId={type_id} -> {r.status_code} ({len(r.text)}b)")
             if r.status_code == 401:
                 current_token = None
-                send_telegram("⚠️ Token süresi doldu!\n\n1. https://basvuru.kosmosvize.com.tr/appointmentForm\n2. Formları doldur, takvim sayfasına gel\n3. F12 → Network → GetClosedDate → Authorization header kopyala (eyJ... ile başlayan kısım)\n4. Bana /token eyJ... gönder")
+                send_telegram("⚠️ Token suresi doldu!\n\n1. https://basvuru.kosmosvize.com.tr/appointmentForm\n2. Formlari doldur, takvim sayfasina gel\n3. F12 → Network → GetClosedDate → Authorization kopyala (eyJ... ile baslayan)\n4. /token eyJ... gonder")
                 return
             if r.status_code == 200 and len(r.text) < 300:
-                send_telegram(f"🚨 KOSMOS VİZE RANDEVU BULUNDU!\ntypeId={type_id}\n⏰ {datetime.now().strftime('%H:%M')}\n\n👉 https://basvuru.kosmosvize.com.tr/appointmentForm")
+                send_telegram(f"KOSMOS VIZE RANDEVU BULUNDU!\ntypeId={type_id}\n{datetime.now().strftime('%H:%M')}\n\nhttps://basvuru.kosmosvize.com.tr/appointmentForm")
         except Exception as e:
             logging.error(f"typeId={type_id}: {e}")
 
 def telegram_listener():
+    logging.info("Telegram listener basliyor...")
     while True:
         try:
             get_telegram_updates()
-        except:
-            pass
-        time.sleep(2)
+        except Exception as e:
+            logging.error(f"Listener hata: {e}")
+        time.sleep(3)
 
 def main():
     global current_token
-    logging.info("Bot başlatıldı!")
-    send_telegram("✅ Kosmos Bot başlatıldı!\n\nToken göndermek için:\n1. https://basvuru.kosmosvize.com.tr/appointmentForm\n2. Formları doldur, takvim sayfasına gel\n3. F12 → Network → GetClosedDate → Headers → Authorization değerini kopyala (eyJ... ile başlayan kısım)\n4. /token eyJ... şeklinde gönder\n\nDurum: /status")
-    threading.Thread(target=telegram_listener, daemon=True).start()
+    logging.info("Bot baslatildi!")
+    
+    # Başlangıçta Telegram'a mesaj gönder
+    send_telegram("✅ Kosmos Bot baslatildi!\n\nToken gondermek icin:\n1. https://basvuru.kosmosvize.com.tr/appointmentForm\n2. Takvim sayfasina kadar doldur\n3. F12 → Network → GetClosedDate → Authorization kopyala (eyJ... ile baslayan kisim)\n4. /token eyJ... seklinde gonder\n\nDurum: /status")
+    
+    # Telegram listener thread
+    t = threading.Thread(target=telegram_listener, daemon=True)
+    t.start()
+    
+    last_check = 0
     while True:
         if not current_token:
-            time.sleep(30)
+            logging.info("Token bekleniyor...")
+            time.sleep(10)
             continue
+        
         if not token_is_valid():
+            logging.warning("Token suresi doldu!")
             current_token = None
+            send_telegram("⚠️ Token suresi doldu! Yeni token gonderin.")
             continue
-        check_appointments()
-        time.sleep(CHECK_INTERVAL)
+        
+        now = time.time()
+        if now - last_check >= CHECK_INTERVAL:
+            check_appointments()
+            last_check = now
+            logging.info(f"Sonraki kontrol: {CHECK_INTERVAL//60} dakika sonra")
+        
+        time.sleep(10)
 
 if __name__ == "__main__":
     main()
