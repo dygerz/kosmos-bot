@@ -11,7 +11,7 @@ TELEGRAM_TOKEN = "8793846897:AAHkIoZnRdDoiuDh8RFdoje1xns5Lh23Xkk"
 TELEGRAM_CHAT_ID = "8704313789"
 DEALER_ID = 1
 TYPE_IDS = [14, 15, 16, 17, 18]
-CHECK_INTERVAL = 15 * 60
+CHECK_INTERVAL = 10 * 60
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s %(message)s')
 
