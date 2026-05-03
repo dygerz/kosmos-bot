@@ -4,6 +4,7 @@ import logging
 import threading
 import base64
 import json
+import os
 from datetime import datetime, timedelta
 
 TELEGRAM_TOKEN = "8793846897:AAHkIoZnRdDoiuDh8RFdoje1xns5Lh23Xkk"
@@ -14,8 +15,14 @@ CHECK_INTERVAL = 15 * 60
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s %(message)s')
 
-current_token = None
+# Token önce environment variable'dan al, sonra Telegram'dan güncellenebilir
+current_token = os.environ.get('KOSMOS_TOKEN', None)
 last_update_id = 0
+
+if current_token:
+    logging.info("Token environment variable'dan alindi!")
+else:
+    logging.info("Token bekleniyor...")
 
 def send_telegram(message):
     for attempt in range(3):
@@ -23,40 +30,41 @@ def send_telegram(message):
             url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
             r = requests.post(url, json={"chat_id": TELEGRAM_CHAT_ID, "text": message}, timeout=15)
             if r.status_code == 200:
-                logging.info(f"Telegram OK: {message[:40]}")
+                logging.info(f"Telegram OK")
                 return True
         except Exception as e:
-            logging.error(f"Telegram send attempt {attempt+1}: {e}")
+            logging.error(f"Telegram send {attempt+1}: {e}")
             time.sleep(2)
     return False
 
 def get_telegram_updates():
     global last_update_id, current_token
-    for attempt in range(3):
-        try:
-            url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/getUpdates"
-            r = requests.get(
-                url,
-                params={"offset": last_update_id + 1, "timeout": 20, "limit": 10},
-                timeout=25
-            )
-            if r.status_code == 200:
-                for update in r.json().get("result", []):
-                    last_update_id = update["update_id"]
-                    msg = update.get("message", {}).get("text", "")
-                    chat_id = str(update.get("message", {}).get("chat", {}).get("id", ""))
-                    logging.info(f"Mesaj alindi: '{msg[:30]}' from {chat_id}")
-                    if msg and msg.startswith("/token "):
-                        current_token = msg[7:].strip()
-                        logging.info("Yeni token alindi!")
-                        send_telegram("✅ Token güncellendi! Bot kontrol ediyor...")
-                    elif msg == "/status":
-                        send_telegram(f"✅ Bot calisıyor\nToken: {'var ✅' if current_token else 'yok ❌'}")
-                return True
-        except Exception as e:
-            logging.error(f"Telegram update attempt {attempt+1}: {e}")
-            time.sleep(3)
-    return False
+    try:
+        url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/getUpdates"
+        r = requests.get(url, params={"offset": last_update_id + 1, "timeout": 20, "limit": 10}, timeout=25)
+        if r.status_code == 200:
+            for update in r.json().get("result", []):
+                last_update_id = update["update_id"]
+                msg = update.get("message", {}).get("text", "")
+                logging.info(f"Mesaj: '{msg[:30]}'")
+                if msg and msg.startswith("/token "):
+                    current_token = msg[7:].strip()
+                    logging.info("Token Telegram'dan alindi!")
+                    send_telegram("✅ Token güncellendi!")
+                elif msg == "/status":
+                    exp_info = ""
+                    if current_token:
+                        try:
+                            payload = current_token.split('.')[1]
+                            payload += '=' * (4 - len(payload) % 4)
+                            data = json.loads(base64.b64decode(payload))
+                            left = int((data.get('exp', 0) - time.time()) / 60)
+                            exp_info = f"\nToken: {left} dakika kaldi"
+                        except:
+                            pass
+                    send_telegram(f"✅ Bot calisiyor\nToken: {'var ✅' if current_token else 'yok ❌'}{exp_info}")
+    except Exception as e:
+        logging.error(f"Update hatasi: {e}")
 
 def token_is_valid():
     if not current_token:
@@ -66,7 +74,7 @@ def token_is_valid():
         payload += '=' * (4 - len(payload) % 4)
         data = json.loads(base64.b64decode(payload))
         remaining = data.get('exp', 0) - time.time()
-        logging.info(f"Token suresi: {int(remaining/60)} dakika kaldi")
+        logging.info(f"Token: {int(remaining/60)} dk kaldi")
         return remaining > 300
     except:
         return True
@@ -91,51 +99,49 @@ def check_appointments():
             logging.info(f"typeId={type_id} -> {r.status_code} ({len(r.text)}b)")
             if r.status_code == 401:
                 current_token = None
-                send_telegram("⚠️ Token suresi doldu!\n\n1. https://basvuru.kosmosvize.com.tr/appointmentForm\n2. Formlari doldur, takvim sayfasina gel\n3. F12 → Network → GetClosedDate → Authorization kopyala (eyJ... ile baslayan)\n4. /token eyJ... gonder")
+                send_telegram("⚠️ Token suresi doldu!\n\n1. https://basvuru.kosmosvize.com.tr/appointmentForm\n2. Formlari doldur, takvim sayfasina gel\n3. F12 → Network → GetClosedDate → Authorization kopyala\n4. Railway Variables'da KOSMOS_TOKEN'i guncelle\nVEYA bota /token eyJ... gonder")
                 return
             if r.status_code == 200 and len(r.text) < 300:
-                send_telegram(f"KOSMOS VIZE RANDEVU BULUNDU!\ntypeId={type_id}\n{datetime.now().strftime('%H:%M')}\n\nhttps://basvuru.kosmosvize.com.tr/appointmentForm")
+                send_telegram(f"🚨 KOSMOS VIZE RANDEVU BULUNDU!\ntypeId={type_id}\n{datetime.now().strftime('%H:%M')}\n\nhttps://basvuru.kosmosvize.com.tr/appointmentForm")
         except Exception as e:
             logging.error(f"typeId={type_id}: {e}")
 
 def telegram_listener():
-    logging.info("Telegram listener basliyor...")
     while True:
         try:
             get_telegram_updates()
         except Exception as e:
-            logging.error(f"Listener hata: {e}")
-        time.sleep(3)
+            logging.error(f"Listener: {e}")
+        time.sleep(5)
 
 def main():
     global current_token
     logging.info("Bot baslatildi!")
     
-    # Başlangıçta Telegram'a mesaj gönder
-    send_telegram("✅ Kosmos Bot baslatildi!\n\nToken gondermek icin:\n1. https://basvuru.kosmosvize.com.tr/appointmentForm\n2. Takvim sayfasina kadar doldur\n3. F12 → Network → GetClosedDate → Authorization kopyala (eyJ... ile baslayan kisim)\n4. /token eyJ... seklinde gonder\n\nDurum: /status")
+    if current_token:
+        send_telegram("✅ Kosmos Bot baslatildi! Token mevcut, kontrol basliyor...")
+    else:
+        send_telegram("✅ Kosmos Bot baslatildi!\n\nToken icin Railway Variables'da KOSMOS_TOKEN ekleyin\nVEYA bota /token eyJ... gonderin")
     
-    # Telegram listener thread
-    t = threading.Thread(target=telegram_listener, daemon=True)
-    t.start()
+    threading.Thread(target=telegram_listener, daemon=True).start()
     
     last_check = 0
     while True:
         if not current_token:
-            logging.info("Token bekleniyor...")
-            time.sleep(10)
-            continue
+            # Environment variable'dan tekrar dene
+            current_token = os.environ.get('KOSMOS_TOKEN', None)
+            if not current_token:
+                time.sleep(10)
+                continue
         
         if not token_is_valid():
-            logging.warning("Token suresi doldu!")
             current_token = None
-            send_telegram("⚠️ Token suresi doldu! Yeni token gonderin.")
             continue
         
         now = time.time()
         if now - last_check >= CHECK_INTERVAL:
             check_appointments()
             last_check = now
-            logging.info(f"Sonraki kontrol: {CHECK_INTERVAL//60} dakika sonra")
         
         time.sleep(10)
 
